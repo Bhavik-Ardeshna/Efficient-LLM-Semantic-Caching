@@ -1,4 +1,4 @@
-import openai
+from groq import Groq
 from typing import Optional
 import json
 from loguru import logger
@@ -8,37 +8,24 @@ from app.models.schemas import QueryType, IntentClassificationResult
 
 class IntentClassificationService:
     def __init__(self):
-        self.client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+        self.client = Groq(api_key=settings.GROQ_API_KEY)
         self.system_prompt = self._create_system_prompt()
     
     def _create_system_prompt(self) -> str:
         """Create system prompt for intent classification"""
-        return """You are an expert at classifying user queries based on their temporal characteristics and data freshness requirements.
+        return """Classify queries into these types:
+- time_sensitive: current/real-time data (weather today, stock prices, latest news)
+- semi_dynamic: changing info (best restaurants, tutorials)  
+- evergreen: stable facts (capitals, formulas, history)
 
-Your task is to classify queries into one of three categories:
+Respond with ONLY this JSON format:
+{"query_type": "time_sensitive", "confidence": 0.8, "reasoning": "contains current data request"}
 
-1. **TIME_SENSITIVE**: Queries that require real-time or very recent data
-   - Examples: "What's the weather today?", "Current stock price of AAPL", "Latest news about...", "Today's schedule"
-   - TTL: Short (30 minutes)
-
-2. **SEMI_DYNAMIC**: Queries that change periodically but not frequently
-   - Examples: "Best restaurants in NYC", "How to learn Python", "Company policies", "Product features"
-   - TTL: Medium (2 hours)
-
-3. **EVERGREEN**: Queries about stable, factual information that rarely changes
-   - Examples: "What is the capital of France?", "How to calculate compound interest", "Historical events", "Mathematical formulas"
-   - TTL: Long (24 hours)
-
-Respond with a JSON object containing:
-- "query_type": one of "time_sensitive", "semi_dynamic", or "evergreen"
-- "confidence": float between 0 and 1
-- "reasoning": brief explanation of your classification
-
-Be conservative: if unsure, lean towards more time-sensitive classifications."""
+Use time_sensitive if uncertain."""
 
     async def classify_intent(self, query: str) -> IntentClassificationResult:
         """
-        Classify the intent of a query using rule-based logic
+        Classify the intent of a query using Groq LLM
         
         Args:
             query: User query to classify
@@ -48,46 +35,77 @@ Be conservative: if unsure, lean towards more time-sensitive classifications."""
         """
         logger.debug(f"Classifying intent for query: {query}")
         
-        query_lower = query.lower()
-        
-        # Time-sensitive keywords
-        time_sensitive_keywords = [
-            'today', 'now', 'current', 'latest', 'recent', 'this week', 'this month',
-            'weather', 'stock price', 'news', 'schedule', 'appointment', 'real-time',
-            'live', 'breaking', 'update', 'immediate'
-        ]
-        
-        # Evergreen keywords
-        evergreen_keywords = [
-            'what is', 'define', 'definition', 'capital of', 'history of', 'how to',
-            'tutorial', 'guide', 'formula', 'calculation', 'math', 'science',
-            'meaning', 'explanation', 'concept', 'principle', 'fact', 'basic'
-        ]
-        
-        # Check for time-sensitive content
-        if any(keyword in query_lower for keyword in time_sensitive_keywords):
+        try:
+            response = self.client.chat.completions.create(
+                model="llama3-8b-8192",  # Fast and efficient Groq model
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": query}
+                ],
+                temperature=0.1,  # Low temperature for consistent classification
+                max_tokens=100   # Minimal tokens needed for JSON response
+            )
+            
+            # Get and validate response
+            response_text = response.choices[0].message.content
+            if not response_text:
+                raise ValueError("Empty response from Groq API")
+            
+            response_text = response_text.strip()
+            logger.debug(f"Raw Groq response: {response_text}")
+            
+            # Try to extract JSON from response (in case there's extra text)
+            json_start = response_text.find('{')
+            json_end = response_text.rfind('}') + 1
+            
+            if json_start == -1 or json_end == 0:
+                raise ValueError(f"No JSON found in response: {response_text}")
+            
+            json_text = response_text[json_start:json_end]
+            classification_data = json.loads(json_text)
+            
+            # Validate required fields
+            if "query_type" not in classification_data:
+                raise ValueError("Missing 'query_type' in response")
+            if "confidence" not in classification_data:
+                classification_data["confidence"] = 0.7  # Default confidence
+            if "reasoning" not in classification_data:
+                classification_data["reasoning"] = "LLM classification"
+            
+            # Map string to enum
+            query_type_str = classification_data["query_type"].upper()
+            try:
+                query_type = QueryType[query_type_str]
+            except KeyError:
+                logger.warning(f"Unknown query type: {query_type_str}, defaulting to TIME_SENSITIVE")
+                query_type = QueryType.TIME_SENSITIVE
+            
             result = IntentClassificationResult(
+                query_type=query_type,
+                confidence=float(classification_data["confidence"]),
+                reasoning=classification_data["reasoning"]
+            )
+            
+            logger.debug(f"LLM classification result: {result.query_type.value} (confidence: {result.confidence})")
+            return result
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error during LLM classification: {e}")
+            logger.error(f"Response was: {response_text if 'response_text' in locals() else 'No response'}")
+            # Fallback to safe default
+            return IntentClassificationResult(
                 query_type=QueryType.TIME_SENSITIVE,
-                confidence=0.9,
-                reasoning=f"Query contains time-sensitive keywords: {query_lower}"
+                confidence=0.5,
+                reasoning=f"JSON parse error: {str(e)}"
             )
-        # Check for evergreen content
-        elif any(keyword in query_lower for keyword in evergreen_keywords):
-            result = IntentClassificationResult(
-                query_type=QueryType.EVERGREEN,
-                confidence=0.85,
-                reasoning=f"Query appears to be about stable, factual information: {query_lower}"
+        except Exception as e:
+            logger.error(f"Error during LLM classification: {e}")
+            # Fallback to safe default
+            return IntentClassificationResult(
+                query_type=QueryType.TIME_SENSITIVE,
+                confidence=0.5,
+                reasoning=f"Fallback classification due to error: {str(e)}"
             )
-        # Default to semi-dynamic for better caching
-        else:
-            result = IntentClassificationResult(
-                query_type=QueryType.SEMI_DYNAMIC,
-                confidence=0.7,
-                reasoning=f"Query classified as semi-dynamic (default): {query_lower}"
-            )
-        
-        logger.debug(f"Intent classification result: {result.query_type.value} (confidence: {result.confidence})")
-        return result
     
     def get_ttl_for_query_type(self, query_type: QueryType) -> int:
         """

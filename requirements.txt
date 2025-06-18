@@ -7,6 +7,7 @@ sentence-transformers
 transformers
 torch
 openai
+groq
 sqlalchemy
 alembic
 python-multipart
