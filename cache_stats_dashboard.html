@@ -320,6 +320,37 @@
             background: #f8d7da;
             color: #721c24;
         }
+        
+        .celery-section {
+            margin-bottom: 40px;
+            padding: 25px;
+            background: rgba(255, 255, 255, 0.7);
+            border-radius: 16px;
+            border: 2px solid #e1e5e9;
+        }
+        
+        .section-title {
+            color: #2c3e50;
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            text-align: center;
+            font-weight: 700;
+        }
+        
+        .task-timeline {
+            grid-column: 1 / -1;
+            background: white;
+            padding: 25px;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            margin-top: 20px;
+        }
+        
+        .task-timeline h3 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -369,6 +400,37 @@
                 <div class="stat-label">Speedup Factor</div>
             </div>
         </div>
+
+        <!-- Celery Tasks Section -->
+        <div class="celery-section">
+            <h2 class="section-title">🔄 Celery Background Tasks</h2>
+            <div class="stats-grid">
+                <div class="stat-card primary">
+                    <div class="stat-value" id="totalTasks">-</div>
+                    <div class="stat-label">Total Tasks</div>
+                </div>
+                <div class="stat-card success">
+                    <div class="stat-value" id="completedTasks">-</div>
+                    <div class="stat-label">Completed</div>
+                </div>
+                <div class="stat-card warning">
+                    <div class="stat-value" id="pendingTasks">-</div>
+                    <div class="stat-label">Pending</div>
+                </div>
+                <div class="stat-card danger">
+                    <div class="stat-value" id="overdueTasks">-</div>
+                    <div class="stat-label">Overdue</div>
+                </div>
+                <div class="stat-card info">
+                    <div class="stat-value" id="failedTasks">-</div>
+                    <div class="stat-label">Failed</div>
+                </div>
+                <div class="stat-card success">
+                    <div class="stat-value" id="cleanupCoverage">-%</div>
+                    <div class="stat-label">Coverage</div>
+                </div>
+            </div>
+        </div>
         
         <div class="charts-container">
             <div class="chart-wrapper">
@@ -378,6 +440,17 @@
             <div class="chart-wrapper">
                 <h3 class="chart-title">Response Time Comparison</h3>
                 <canvas id="responseTimeChart" class="chart-canvas"></canvas>
+            </div>
+        </div>
+        
+        <div class="charts-container">
+            <div class="chart-wrapper">
+                <h3 class="chart-title">Celery Task Status Distribution</h3>
+                <canvas id="celeryTaskChart" class="chart-canvas"></canvas>
+            </div>
+            <div class="chart-wrapper">
+                <h3 class="chart-title">Task Completion Trends</h3>
+                <canvas id="taskTrendChart" class="chart-canvas"></canvas>
             </div>
         </div>
         
@@ -398,13 +471,13 @@
         <div class="controls">
             <button class="btn btn-primary" onclick="fetchStats()">🔄 Refresh Now</button>
             <button class="btn btn-secondary" onclick="clearCharts()">🗑️ Clear Charts</button>
-            <a class="btn btn-primary" href="http://localhost:8000/docs" target="_blank">📚 API Docs</a>
+            <a class="btn btn-primary" href="http://localhost:3000/docs" target="_blank">📚 API Docs</a>
         </div>
     </div>
 
     <script>
         // Configuration
-        const API_BASE_URL = 'http://localhost:8000';
+        const API_BASE_URL = 'http://localhost:3000';
         const MAX_DATA_POINTS = 50;
         
         // Global variables
@@ -419,7 +492,7 @@
         };
         
         // Charts
-        let hitRateChart, responseTimeChart, timelineChart;
+        let hitRateChart, responseTimeChart, timelineChart, celeryTaskChart, taskTrendChart;
         
         // Initialize when page loads
         document.addEventListener('DOMContentLoaded', function() {
@@ -618,19 +691,119 @@
                     }
                 }
             });
+            
+            // Celery Task Status Chart
+            const celeryTaskCtx = document.getElementById('celeryTaskChart').getContext('2d');
+            celeryTaskChart = new Chart(celeryTaskCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Completed', 'Pending', 'Overdue', 'Failed', 'Cancelled'],
+                    datasets: [{
+                        data: [0, 0, 0, 0, 0],
+                        backgroundColor: ['#2ecc71', '#f39c12', '#e74c3c', '#8e44ad', '#95a5a6'],
+                        borderWidth: 3,
+                        borderColor: '#fff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    layout: {
+                        padding: 10
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                padding: 15,
+                                font: {
+                                    size: 12,
+                                    weight: 'bold'
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            
+            // Task Completion Trend Chart
+            const taskTrendCtx = document.getElementById('taskTrendChart').getContext('2d');
+            taskTrendChart = new Chart(taskTrendCtx, {
+                type: 'bar',
+                data: {
+                    labels: ['Recent 24h', 'Total Completed'],
+                    datasets: [{
+                        label: 'Task Count',
+                        data: [0, 0],
+                        backgroundColor: ['#3498db', '#2ecc71'],
+                        borderColor: ['#2980b9', '#27ae60'],
+                        borderWidth: 2,
+                        borderRadius: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    layout: {
+                        padding: 10
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: {
+                                display: false
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Task Count',
+                                font: {
+                                    size: 12,
+                                    weight: 'bold'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(0,0,0,0.1)'
+                            }
+                        }
+                    }
+                }
+            });
         }
         
         async function fetchStats() {
             try {
-                const response = await fetch(`${API_BASE_URL}/api/cache/stats`);
+                // Fetch both cache stats and cleanup stats
+                const [cacheResponse, cleanupResponse] = await Promise.all([
+                    fetch(`${API_BASE_URL}/api/cache/stats`),
+                    fetch(`${API_BASE_URL}/api/cleanup/stats`)
+                ]);
                 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                if (!cacheResponse.ok) {
+                    throw new Error(`Cache stats error! status: ${cacheResponse.status}`);
                 }
                 
-                const data = await response.json();
-                updateUI(data);
-                updateCharts(data);
+                if (!cleanupResponse.ok) {
+                    throw new Error(`Cleanup stats error! status: ${cleanupResponse.status}`);
+                }
+                
+                const cacheData = await cacheResponse.json();
+                const cleanupData = await cleanupResponse.json();
+                
+                // Combine the data
+                const combinedData = {
+                    ...cacheData,
+                    cleanup_stats: cleanupData
+                };
+                
+                updateUI(combinedData);
+                updateCharts(combinedData);
                 setConnectionStatus(true);
                 
             } catch (error) {
@@ -640,12 +813,21 @@
         }
         
         function updateUI(data) {
-            // Update stat cards
+            // Update cache stat cards
             document.getElementById('totalQueries').textContent = data.total_queries || 0;
             document.getElementById('cacheHits').textContent = data.cache_hits || 0;
             document.getElementById('cacheMisses').textContent = data.cache_misses || 0;
             document.getElementById('hitRate').textContent = `${data.hit_rate_percent || 0}%`;
             document.getElementById('speedupFactor').textContent = `${data.speedup_factor || 0}x`;
+            
+            // Update Celery task stats
+            const cleanupStats = data.cleanup_stats || {};
+            document.getElementById('totalTasks').textContent = cleanupStats.total_cleanup_tasks || 0;
+            document.getElementById('completedTasks').textContent = cleanupStats.completed_tasks || 0;
+            document.getElementById('pendingTasks').textContent = cleanupStats.pending_tasks || 0;
+            document.getElementById('overdueTasks').textContent = cleanupStats.overdue_tasks || 0;
+            document.getElementById('failedTasks').textContent = cleanupStats.failed_tasks || 0;
+            document.getElementById('cleanupCoverage').textContent = `${cleanupStats.cleanup_coverage_percentage || 0}%`;
             
             // Update vector DB info
             const vectorDb = data.vector_db || {};
@@ -696,6 +878,26 @@
             timelineChart.data.datasets[0].data = timelineData.hitRate;
             timelineChart.data.datasets[1].data = timelineData.speedupFactor;
             timelineChart.update('none');
+            
+            // Update Celery task charts
+            const cleanupStats = data.cleanup_stats || {};
+            
+            // Update task status distribution chart
+            celeryTaskChart.data.datasets[0].data = [
+                cleanupStats.completed_tasks || 0,
+                cleanupStats.pending_tasks || 0,
+                cleanupStats.overdue_tasks || 0,
+                cleanupStats.failed_tasks || 0,
+                cleanupStats.cancelled_tasks || 0
+            ];
+            celeryTaskChart.update('none');
+            
+            // Update task completion trend chart
+            taskTrendChart.data.datasets[0].data = [
+                cleanupStats.recent_completed_24h || 0,
+                cleanupStats.completed_tasks || 0
+            ];
+            taskTrendChart.update('none');
         }
         
         function setConnectionStatus(connected, errorMessage = '') {

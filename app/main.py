@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 import os
 import logging
@@ -54,7 +55,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Semantic Cache Service",
-    description="AI-powered semantic caching system for optimizing LLM queries",
+    description="""**📊 [View Live Dashboard](http://localhost:3000/dashboard)**
+
+AI-powered semantic caching system for optimizing LLM queries
+
+Features:
+- Hybrid semantic search with BM25 + dense embeddings
+- Intelligent TTL management with LLM-powered query classification
+- Multi-tier storage with automated cleanup
+- Real-time monitoring and analytics
+""",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -70,6 +80,30 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(router, prefix="/api")
+
+
+@app.get("/dashboard")
+async def serve_dashboard():
+    """Serve the cache stats dashboard"""
+    # Get the project root directory (parent of app directory)
+    current_dir = os.path.dirname(__file__)  # app/
+    project_root = os.path.dirname(current_dir)  # project root
+    dashboard_path = os.path.join(project_root, "cache_stats_dashboard.html")
+    
+    logger.info(f"Looking for dashboard at: {dashboard_path}")
+    
+    if os.path.exists(dashboard_path):
+        return FileResponse(dashboard_path, media_type="text/html")
+    else:
+        # Try alternative paths as fallback
+        alternative_path = os.path.join(os.getcwd(), "cache_stats_dashboard.html")
+        logger.info(f"Trying alternative path: {alternative_path}")
+        
+        if os.path.exists(alternative_path):
+            return FileResponse(alternative_path, media_type="text/html")
+        else:
+            logger.error(f"Dashboard not found at {dashboard_path} or {alternative_path}")
+            raise HTTPException(status_code=404, detail=f"Dashboard not found. Checked: {dashboard_path}")
 
 
 @app.get("/health")

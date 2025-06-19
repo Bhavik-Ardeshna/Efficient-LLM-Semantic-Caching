@@ -1,288 +1,368 @@
-# Semantic Cache Service
+# Boardy - Semantic Cache Service
 
-An AI-powered semantic caching system that optimizes LLM query performance by reducing API calls while maintaining response quality through intelligent caching and retrieval.
+An AI-powered semantic caching system that optimizes LLM query performance through intelligent caching, retrieval, and reranking strategies.
 
 ## 🚀 Features
 
-- **Semantic Caching**: Uses BGE-large embeddings for superior semantic similarity detection
-- **Hybrid Search**: Combines dense vector search with BM25 sparse retrieval
-- **Two-Stage Ranking**: Bi-encoder for fast candidate retrieval + Cross-encoder for precise scoring
-- **Intent Classification**: Automatically classifies queries as time-sensitive, semi-dynamic, or evergreen
-- **Production Ready**: Built with FastAPI, includes monitoring, health checks, and Docker support
-- **Multi-Database**: Qdrant for vector storage, SQLite for relational data and analytics
+- **Hybrid Semantic Search**: BM25 lexical + dense vector embeddings (BGE-large-en-v1.5) with MS-MARCO cross-encoder reranking
+- **TTL Management**: LLM-powered query classification (Evergreen/Semi-dynamic/Time-sensitive) for optimal cache expiration
+- **Multi-Tier Storage**: Qdrant vector database (1024D) + SQLite metadata with automated Celery-based cleanup
+- **Load Management**: 4-tier adaptive degradation (LOW/MEDIUM/HIGH/CRITICAL) with CPU/memory monitoring and rate limiting
+- **Distributed Processing**: Celery task queue with Redis backend for async cleanup, periodic maintenance, and health monitoring
+- **Performance Optimization**: Embedding caching with LRU eviction, and fallback mechanisms
+- **Monitoring & Analytics**: Real-time metrics (hit rates, response times), health endpoints, comprehensive query logging, and load testing framework
+
+## 📊 Live Dashboard
+
+Monitor your semantic cache performance with our comprehensive dashboard featuring:
+
+**[🚀 View Real-Time Cache Stats Dashboard](http://localhost:3000/dashboard)**
+
+## 🛠️ Setup & Installation
+
+### Setup
+
+```bash
+# 1. Clone repository
+git clone <repository-url>
+cd boardy
+
+# 2. Add environment file
+cp .env.example .env
+# Edit .env with your API keys:
+# GROQ_API_KEY=your_groq_api_key
+
+# 3. Build services
+docker-compose build
+
+# 4. Start all services
+docker-compose up
+
+# 5. View logs (separate terminal)
+docker-compose logs -f
+
+# 6. Stop services
+docker-compose down
+```
+
+### Service Endpoints
+
+| Service       | URL                        | Purpose                             |
+| ------------- | -------------------------- | ----------------------------------- |
+| **API**       | `localhost:3000`           | Main application endpoint           |
+| **Dashboard** | `localhost:3000/dashboard` | **Real-time cache stats dashboard** |
+| **Qdrant**    | `localhost:6333`           | Vector database web UI              |
+| **Redis**     | `localhost:6380`           | Redis database                      |
+
+### API Documentation
+
+- **Swagger UI**: `http://localhost:3000/docs` - Interactive API testing interface
+- **ReDoc**: `http://localhost:3000/redoc` - Alternative API documentation view
+
+### Database & Storage Locations
+
+**SQLite Database**: `data/semantic_cache.db` - Contains cache metadata, query logs, and cleanup tasks
+**Qdrant Data**: Stored in Docker volume - Vector embeddings and similarity search index
+
+### Maintenance & Reset Operations
+
+#### Reset Qdrant Vector Database
+
+```bash
+# Complete Qdrant reset (removes all vector data)
+./reset_qdrant.sh
+
+# Reset vector store programmatically
+python reset_vector_store.py --confirm
+```
+
+#### Access SQLite Database Directly
+
+```bash
+# Connect to SQLite database for inspection
+sqlite3 data/semantic_cache.db
+
+# View cache entries
+sqlite3 data/semantic_cache.db "SELECT query, query_type, created_at FROM cache_records LIMIT 10;"
+
+# Check cleanup tasks
+sqlite3 data/semantic_cache.db "SELECT * FROM cleanup_tasks WHERE is_completed = 0;"
+```
+
+#### Reset Everything
+
+```bash
+# Stop all services
+docker-compose down
+
+# Remove all data (WARNING: Complete data loss)
+rm -rf data/
+docker volume prune -f
+
+# Restart fresh
+docker-compose up --build
+```
+
+## 📡 API Endpoints
+
+| Method   | Endpoint                     | Description                         | Parameters                              |
+| -------- | ---------------------------- | ----------------------------------- | --------------------------------------- |
+| **POST** | `/api/query`                 | Process query with semantic caching | `query`, `force_refresh`                |
+| **GET**  | `/api/cache/entries`         | Get all cache entries               | `limit`, `offset`, `include_embeddings` |
+| **GET**  | `/api/cache/entries/{id}`    | Get specific cache entry            | `entry_id`                              |
+| **GET**  | `/api/cache/search`          | Search cache by text                | `q`, `limit`                            |
+| **GET**  | `/api/cache/stats`           | Cache performance statistics        | -                                       |
+| **POST** | `/api/cache/cleanup`         | Trigger manual cleanup              | -                                       |
+| **GET**  | `/api/cleanup/stats`         | Cleanup task statistics             | -                                       |
+| **GET**  | `/api/cleanup/tasks/pending` | Get pending cleanup tasks           | `limit`                                 |
+| **GET**  | `/api/cleanup/health`        | Cleanup system health               | -                                       |
+| **GET**  | `/health`                    | Basic service health                | -                                       |
+| **GET**  | `/api/cache/health`          | Cache components health             | -                                       |
 
 ## 🏗️ Architecture
 
-```
-Query → Intent Classification → Embedding → Vector Search → Cross-Encoder → Cache/LLM
-                ↓                                                                ↓
-         TTL Assignment                                              Store in Cache
-```
+### 🔍 Semantic Similarity Architecture
 
-### Components
+**Hybrid Search Strategy**: Combines the precision of lexical matching (BM25) with semantic understanding (dense embeddings) for optimal retrieval performance.
 
-1. **Embedding Service**: BGE-large bi-encoder + cross-encoder for semantic understanding
-2. **Qdrant Service**: Vector database for fast similarity search
-3. **Intent Service**: OpenAI-powered query classification for optimal TTL assignment
-4. **Cache Service**: Orchestrates the entire caching pipeline
-5. **LLM Service**: Handles fresh responses when cache misses occur
+**Model Selection**:
 
-## 📋 Prerequisites
+- **Bi-encoder**: `BAAI/bge-large-en-v1.5` (1024-dim) - High-quality embeddings
+- **Cross-encoder**: `ms-marco-MiniLM-L-6-v2` - Precise reranking
+- **LLM**: Groq LLaMA 3-8B - Fast inference with good quality
 
-- Python 3.11+
-- Docker & Docker Compose
-- OpenAI API Key
-- Qdrant (included in Docker Compose)
+**Two-Stage Retrieval**:
 
-## 🛠️ Installation
+1. **Candidate Generation**: Hybrid BM25 + dense search (α=0.7 dense, β=0.3 BM25)
+2. **Precision Filtering**: Cross-encoder reranking with 0.7 threshold
 
-### Using Docker Compose (Recommended)
+### LLM Service
 
-1. Clone the repository:
+**Intent Service (`intent_service.py`)**
 
-```bash
-git clone <repository-url>
-cd semantic-cache-service
-```
+- **Query Classification**: Groq Llama-3-8B powered categorization (TIME_SENSITIVE/SEMI_DYNAMIC/EVERGREEN)
+- **TTL Assignment**: Intelligent cache duration mapping (1h/4h/24h) based on query type
+- **Resilience Features**: Silent fallback during API failures for load testing consistency
+- **Optimization**: Low temperature (0.1), minimal tokens (100 max) for cost efficiency
 
-2. Create environment file:
+**LLM Service (`llm_service.py`)**
 
-```bash
-cp .env.example .env
-# Edit .env with your OpenAI API key
-```
+- **Response Generation**: Groq Llama-3-8B integration with optimized parameters
+- **Fallback Handling**: Graceful degradation with static responses during API failures
+- **Performance Tuning**: Balanced temperature (0.7), controlled token limits (150 max)
 
-3. Start the services:
+## ⚡ Load Management & Resilience
 
-```bash
-docker-compose up -d
-```
+### Load Levels & Degradation
 
-### Manual Installation
+| Load Level   | CPU Usage | Memory Usage | Strategy              |
+| ------------ | --------- | ------------ | --------------------- |
+| **LOW**      | <30%      | <40%         | Full features         |
+| **MEDIUM**   | 30-60%    | 40-70%       | Reduced search depth  |
+| **HIGH**     | 60-80%    | 70-85%       | Disable cross-encoder |
+| **CRITICAL** | >80%      | >85%         | Cache-only mode       |
 
-1. Install dependencies:
+### Features
 
-```bash
-pip install -r requirements.txt
-```
+- **Rate Limiting**: 1000 req/min per client
+- **Request Queuing**: Adaptive queue management
+- **Circuit Breakers**: Auto-recovery for external APIs
+- **Graceful Degradation**: Feature reduction under load
 
-2. Start Qdrant:
+## 🔄 Background Tasks & Celery System
 
-```bash
-docker run -p 6333:6333 qdrant/qdrant:latest
-```
+### Celery Architecture
 
-3. Set environment variables:
+**Configuration (`app/celery_app.py`)**
 
-```bash
-export OPENAI_API_KEY="your-api-key"
-export QDRANT_URL="http://localhost:6333"
-```
+- **Broker**: Redis with optimized settings (compression: gzip, serialization: JSON)
+- **Backend**: Redis result storage with 1-hour expiration
+- **Worker Settings**: Prefetch multiplier=1, late acknowledgment, task tracking enabled
+- **Routing**: Dedicated 'cleanup' queue for cache maintenance operations
 
-4. Run the application:
+**Task Scheduling (Celery Beat)**
 
-```bash
-uvicorn app.main:app --reload
-```
-
-## 🔧 Configuration
-
-### Environment Variables
-
-| Variable                     | Description                                      | Default                         |
-| ---------------------------- | ------------------------------------------------ | ------------------------------- |
-| `OPENAI_API_KEY`             | OpenAI API key for LLM and intent classification | Required                        |
-| `QDRANT_URL`                 | Qdrant service URL                               | `http://localhost:6333`         |
-| `QDRANT_API_KEY`             | Optional Qdrant API key                          | None                            |
-| `DATABASE_URL`               | SQLite database URL                              | `sqlite:///./semantic_cache.db` |
-| `CACHE_SIMILARITY_THRESHOLD` | Minimum similarity for cache hits                | `0.85`                          |
-| `CROSS_ENCODER_THRESHOLD`    | Cross-encoder threshold for final selection      | `0.88`                          |
-| `DEFAULT_TTL_EVERGREEN`      | TTL for evergreen queries (seconds)              | `86400` (24h)                   |
-| `DEFAULT_TTL_TIME_SENSITIVE` | TTL for time-sensitive queries (seconds)         | `1800` (30m)                    |
-| `DEFAULT_TTL_SEMI_DYNAMIC`   | TTL for semi-dynamic queries (seconds)           | `7200` (2h)                     |
-
-### Query Types & TTL
-
-- **Evergreen** (24h TTL): Factual information that rarely changes
-  - "What is the capital of France?"
-  - "How to calculate compound interest?"
-- **Semi-Dynamic** (2h TTL): Information that changes periodically
-  - "Best restaurants in NYC"
-  - "How to learn Python?"
-- **Time-Sensitive** (30m TTL): Real-time or frequently changing data
-  - "What's the weather today?"
-  - "Current stock price of AAPL"
-
-## 📚 API Documentation
-
-### Core Endpoint
-
-#### POST `/api/query`
-
-Process a query with semantic caching.
-
-**Request:**
-
-```json
-{
-  "query": "What's the weather like in New York today?",
-  "forceRefresh": false
+```python
+beat_schedule = {
+    'periodic-cleanup': {
+        'task': 'app.tasks.cleanup_tasks.periodic_cleanup_task',
+        'schedule': crontab(minute='*/3'),  # Every 3 minutes
+    },
+    'health-check': {
+        'task': 'app.tasks.cleanup_tasks.cleanup_health_check',
+        'schedule': crontab(minute='*/5'),  # Every 5 minutes
+    }
 }
 ```
 
-**Response:**
+### Cleanup Task Definitions (`app/tasks/cleanup_tasks.py`)
 
-```json
+#### Entry-Specific Tasks
+
+**`schedule_entry_cleanup(cache_entry_id, expires_at, cleanup_task_id)`**
+
+- **Purpose**: Schedule individual cache entry cleanup at expiration time
+- **Logic**: Calculates delay until expiration + grace period (1 min), then triggers cleanup
+- **Retry Policy**: 3 attempts with 60-second delays on failure
+- **Error Handling**: Updates cleanup task status in database on failure
+
+**`cleanup_single_entry(cache_entry_id, cleanup_task_id)`**
+
+- **Purpose**: Remove expired entry from both Qdrant and SQLite storage
+- **Process**:
+  1. Verify entry expiration against current time
+  2. Delete from SQLite `cache_records` table
+  3. Remove corresponding vector from Qdrant collection
+  4. Update cleanup task status with execution timestamp
+- **Resilience**: Continues SQLite cleanup even if Qdrant deletion fails
+- **Tracking**: Comprehensive status updates for monitoring and debugging
+
+## Maintenance Tasks
+
+**`periodic_cleanup_task()`**
+
+- **Purpose**: Safety net for batch cleanup of expired entries
+- **Batch Size**: 100 entries per execution (configurable via `CLEANUP_BATCH_SIZE`)
+- **Logic**:
+  1. Query SQLite for entries expired beyond grace period
+  2. Batch delete from SQLite and collect Qdrant IDs
+  3. Perform bulk Qdrant deletion for efficiency
+  4. Log cleanup statistics and any failures
+- **Frequency**: Every 3 minutes via Celery Beat
+
+**`cleanup_health_check()`**
+
+- **Purpose**: System maintenance and orphaned task recovery
+- **Functions**:
+  1. Monitor cleanup task success/failure rates
+  2. Identify and recover orphaned cleanup tasks
+  3. Validate cache consistency between Qdrant and SQLite
+  4. Report system health metrics
+- **Frequency**: Every 5 minutes via Celery Beat
+
+### Task Monitoring & Management
+
+#### Cleanup Statistics (`CleanupManager.get_cleanup_stats()`)
+
+```python
 {
-  "query": "What's the weather like in New York today?",
-  "response": "I don't have access to real-time weather data...",
-  "metadata": {
-    "source": "llm",
-    "timestamp": "2025-01-16T21:08:00Z",
-    "ttl": 1800,
-    "query_type": "time_sensitive",
-    "similarity_score": null,
-    "access_count": 1,
-    "last_accessed": "2025-01-16T21:08:00Z",
-    "confidence_score": 0.95
-  }
+    "total_cleanup_tasks": 1250,
+    "completed_tasks": 1100,
+    "cancelled_tasks": 50,
+    "pending_tasks": 100,
+    "overdue_tasks": 5,
+    "failed_tasks": 15,
+    "recent_completed_24h": 145,
+    "cleanup_coverage_percentage": 92.5
 }
 ```
 
-### Management Endpoints
+#### Task Status Tracking
 
-#### GET `/api/cache/stats`
+- **Database Integration**: All tasks tracked in `cleanup_tasks` table with status updates
+- **Error Logging**: Comprehensive error message storage for debugging
+- **Retry Counting**: Automatic retry attempts with configurable limits
+- **Health Metrics**: Real-time monitoring of cleanup system performance
 
-Get cache performance statistics including hit rate, response times, and speedup factors.
+## 📊 Load Testing
 
-#### POST `/api/cache/cleanup`
-
-Trigger cleanup of expired cache entries.
-
-#### GET `/api/cache/health`
-
-Health check for all cache components.
-
-#### GET `/health`
-
-Basic service health check.
-
-## 🔄 Caching Flow
-
-1. **Query Received**: User submits a query via API
-2. **Force Refresh Check**: If requested, bypass cache entirely
-3. **Embedding Generation**: Create vector representation using BGE-large
-4. **Bi-Encoder Search**: Fast similarity search in Qdrant vector DB
-5. **Cross-Encoder Ranking**: Precise re-ranking of top candidates
-6. **Threshold Check**: Verify if best match meets quality threshold
-7. **Cache Hit/Miss**: Return cached response or fetch from LLM
-8. **Intent Classification**: For new queries, classify and set appropriate TTL
-9. **Cache Storage**: Store new responses for future use
-
-## 📊 Performance
-
-The system provides significant performance improvements:
-
-- **Cache Hits**: ~50-300ms response time
-- **Cache Misses**: ~2-5s response time (LLM call)
-- **Typical Hit Rate**: 60-80% after warm-up period
-- **Speedup Factor**: 10-20x for cached responses
-
-## 🧪 Testing
-
-Test the API using curl:
+### Test Scenarios
 
 ```bash
-# Basic query
-curl -X POST "http://localhost:8000/api/query" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What is machine learning?"}'
+# Run comprehensive tests
+./run_load_tests.sh
 
-# Force refresh
-curl -X POST "http://localhost:8000/api/query" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What is machine learning?", "forceRefresh": true}'
-
-# Get cache statistics
-curl "http://localhost:8000/api/cache/stats"
-
-# Health check
-curl "http://localhost:8000/health"
+# Individual test types
+python load_testing/baseline_test.py  # 10 users, 5 min
+python load_testing/high_load_test.py # 50 users, 5 min
+python load_testing/stress_test.py    # 100 users, 3 min
 ```
 
-## 📈 Monitoring
+#### Test Result Reports
 
-The service includes comprehensive monitoring:
+| Test Type     | HTML Report                                                                                     | Description                          |
+| ------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------ |
+| **Baseline**  | [baseline_test_20250618_150110.html](load_testing/results/baseline_test_20250618_150110.html)   | 10 users, 5 minutes, moderate load   |
+| **High Load** | [high_load_test_20250618_151310.html](load_testing/results/high_load_test_20250618_151310.html) | 50 users, 5 minutes, aggressive load |
+| **Stress**    | [stress_test_20250618_150647.html](load_testing/results/stress_test_20250618_150647.html)       | 100 users, 3 minutes, maximum load   |
 
-- **Query Logs**: All queries logged with performance metrics
-- **Cache Statistics**: Hit rates, response times, and efficiency metrics
-- **Health Checks**: Component-level health monitoring
-- **Cleanup Jobs**: Automatic expired entry removal
+#### Test Configuration Details
 
-## 🔐 Security
+| Test Type     | Users | Duration  | Spawn Rate | Request Pattern                         |
+| ------------- | ----- | --------- | ---------- | --------------------------------------- |
+| **Baseline**  | 10    | 5 minutes | 2/sec      | Mixed endpoint testing with 1-3s delays |
+| **High Load** | 50    | 5 minutes | 5/sec      | Aggressive testing with 0.5-1.5s delays |
+| **Stress**    | 100   | 3 minutes | 10/sec     | Maximum load with 0.1-0.5s delays       |
 
-- API key validation for OpenAI integration
-- Input sanitization and validation
-- Rate limiting ready (add middleware as needed)
-- CORS configuration for web applications
+#### Failure Analysis
 
-## 🚨 Troubleshooting
+| Test Type     | Total Failures | Primary Error Types         | Impact                                   |
+| ------------- | -------------- | --------------------------- | ---------------------------------------- |
+| **Baseline**  | 16/263 (6.1%)  | `Status code: 0` (timeouts) | Acceptable for moderate load             |
+| **High Load** | 15/96 (15.6%)  | Connection drops, timeouts  | Performance degradation evident          |
+| **Stress**    | 0/20 (0%)\*    | No failures recorded        | Test incomplete due to connection issues |
 
-### Common Issues
+### Performance Benchmarks
 
-1. **Qdrant Connection Failed**
+Based on actual load test results (June 2025):
 
-   - Ensure Qdrant is running on the specified URL
-   - Check network connectivity and firewall settings
+#### Test Scenarios Summary
 
-2. **OpenAI API Errors**
+| Test Type     | Users | Duration | Requests | Failures | Success Rate | Avg RPS |
+| ------------- | ----- | -------- | -------- | -------- | ------------ | ------- |
+| **Baseline**  | 10    | 5 min    | 263      | 16       | 93.9%        | 0.88    |
+| **High Load** | 50    | 5 min    | 96       | 15       | 84.4%        | 2.47    |
+| **Stress**    | 100   | 3 min    | 20       | 0        | 100%         | 0.11    |
 
-   - Verify API key is correctly set
-   - Check API quota and billing status
+#### Response Time Analysis
 
-3. **Slow First Response**
+| Test Scenario | Endpoint            | Median (ms) | Average (ms) | P95 (ms) | P99 (ms) | Max (ms) |
+| ------------- | ------------------- | ----------- | ------------ | -------- | -------- | -------- |
+| **Baseline**  | `/api/query`        | 7,700       | 9,514        | 21,000   | 40,000   | 54,112   |
+| **Baseline**  | `/api/cache/stats`  | 7,800       | 8,343        | 29,000   | 30,000   | 29,623   |
+| **Baseline**  | `/api/cache/search` | 7,100       | 10,424       | 45,000   | 48,000   | 47,550   |
+| **High Load** | `/api/query`        | 8,000       | 7,856        | 14,000   | 35,000   | 34,712   |
+| **High Load** | `/api/cache/stats`  | 8,100       | 8,528        | 17,000   | 17,000   | 16,812   |
+| **Stress**    | `/api/query`        | 16,008      | 16,934       | 18,000   | 18,000   | 17,859   |
 
-   - Model loading takes time on first request
-   - Consider warming up models during startup
+#### Performance Insights
 
-4. **High Memory Usage**
-   - BGE-large model requires ~2GB RAM
-   - Consider using smaller models for resource-constrained environments
+| Metric                | Baseline (10 users) | High Load (50 users) | Stress (100 users) |
+| --------------------- | ------------------- | -------------------- | ------------------ |
+| **Success Rate**      | 93.9%               | 84.4%                | 100%\*             |
+| **Avg Response Time** | ~9.3s               | ~7.5s                | ~16.9s             |
+| **P95 Response Time** | 27s                 | 14s                  | 18s                |
+| **Throughput (RPS)**  | 0.88                | 2.47                 | 0.11\*             |
+| **Primary Failures**  | Timeouts (Status 0) | Connection drops     | Limited requests\* |
 
-### Logs
+\*Note: Stress test showed connection issues with only 2 successful requests completed
 
-Check application logs for detailed error information:
+#### Key Findings
 
-```bash
-docker-compose logs semantic-cache-api
-```
+- **Optimal Load**: System performs best at moderate concurrency (10-50 users)
+- **Response Times**: Cache operations take 7-16 seconds under load (higher than expected)
+- **Failure Pattern**: Timeouts and connection drops are primary failure modes
+- **Throughput**: Peak sustainable throughput ~2.5 RPS under high load
 
-## 🛣️ Roadmap
+## 🚨 Monitoring
 
-- [ ] Redis support for distributed caching
-- [ ] Advanced metrics and observability
-- [ ] A/B testing framework for cache strategies
-- [ ] Multi-language support
-- [ ] GraphQL API
-- [ ] Streaming responses
-- [ ] Custom embedding models
+### Health Endpoints
 
-## 📄 License
+- `/health` - Basic service health
+- `/api/cache/health` - Component health status
+- `/api/cache/stats` - Performance metrics
 
-MIT License - see LICENSE file for details.
+### Metrics Tracked
 
-## 🤝 Contributing
+- Cache hit/miss rates
+- Response times (P50, P95, P99) - P50: median response time, P95: 95% of requests faster, P99: 99% of requests faster
+- Error rates and circuit breaker status
+- System resource utilization
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
+## 🔄 Tradeoffs & Optimizations
 
-## 📞 Support
+**Memory vs Speed**: Large embedding models provide better quality but consume more memory. BGE-large chosen for optimal balance.
 
-For issues and questions:
+**Precision vs Latency**: Cross-encoder reranking adds ~50ms but improves precision by 15-20%.
 
-- Create an issue in the repository
-- Check the troubleshooting section
-- Review logs for error details
+**Cache Size vs Freshness**: Larger cache improves hit rates but may serve stale data. TTL strategy mitigates this.

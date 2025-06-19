@@ -77,6 +77,9 @@ class QdrantService:
         try:
             point_id = str(uuid.uuid4()) if not cache_entry.id else cache_entry.id
             
+            # Check cache size limit and cleanup if necessary
+            self._enforce_cache_size_limit()
+            
             # Prepare payload
             payload = {
                 "query": cache_entry.query,
@@ -110,6 +113,54 @@ class QdrantService:
         except Exception as e:
             logger.error(f"Failed to add cache entry: {e}")
             raise
+    
+    def _enforce_cache_size_limit(self):
+        """Enforce MAX_CACHE_SIZE limit by removing oldest entries"""
+        try:
+            # Get current collection info
+            collection_info = self.get_collection_info()
+            current_count = collection_info.get("points_count", 0)
+            
+            if current_count >= settings.MAX_CACHE_SIZE:
+                logger.info(f"Cache size limit reached ({current_count}/{settings.MAX_CACHE_SIZE}), removing oldest entries")
+                
+                # Calculate how many entries to remove (10% of max size or at least 1)
+                entries_to_remove = max(1, int(settings.MAX_CACHE_SIZE * 0.1))
+                
+                # Get oldest entries by timestamp
+                scroll_result = self.client.scroll(
+                    collection_name=self.collection_name,
+                    limit=entries_to_remove * 2,  # Get more to ensure we have enough candidates
+                    with_payload=True
+                )
+                
+                if scroll_result[0]:  # Check if we have points
+                    # Sort by timestamp (oldest first)
+                    points_with_timestamps = []
+                    for point in scroll_result[0]:
+                        timestamp_str = point.payload.get("timestamp", "")
+                        try:
+                            timestamp = datetime.fromisoformat(timestamp_str)
+                            points_with_timestamps.append((point.id, timestamp))
+                        except (ValueError, TypeError):
+                            # If timestamp parsing fails, consider it very old
+                            points_with_timestamps.append((point.id, datetime.min))
+                    
+                    # Sort by timestamp and get oldest entries
+                    points_with_timestamps.sort(key=lambda x: x[1])
+                    points_to_delete = [point_id for point_id, _ in points_with_timestamps[:entries_to_remove]]
+                    
+                    # Delete oldest entries
+                    if points_to_delete:
+                        self.client.delete(
+                            collection_name=self.collection_name,
+                            points_selector=points_to_delete
+                        )
+                        logger.info(f"Removed {len(points_to_delete)} oldest cache entries to maintain size limit")
+                
+        except Exception as e:
+            logger.error(f"Failed to enforce cache size limit: {e}")
+            # Don't raise the exception as this shouldn't prevent adding new entries
     
     def search_similar_queries(
         self, 

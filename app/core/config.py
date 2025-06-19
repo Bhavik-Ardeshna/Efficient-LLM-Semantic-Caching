@@ -4,9 +4,6 @@ import os
 
 
 class Settings(BaseSettings):
-    # OpenAI Configuration
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    
     # Groq Configuration
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     

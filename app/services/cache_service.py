@@ -3,6 +3,11 @@ import time
 import uuid
 from datetime import datetime, timedelta
 from loguru import logger
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+from sqlalchemy import text, desc, asc, and_, or_
+from sqlalchemy.exc import SQLAlchemyError
+import asyncio
 
 from app.services.embedding_service import EmbeddingService
 from app.services.qdrant_service import QdrantService
@@ -11,7 +16,7 @@ from app.services.llm_service import LLMService
 from app.services.cleanup_manager import CleanupManager
 from app.models.schemas import (
     QueryRequest, QueryResponse, CacheEntry, CacheMetadata, 
-    CacheSource, SimilaritySearchResult
+    CacheSource, SimilaritySearchResult, QueryType
 )
 from app.core.config import settings
 from app.db.database import SessionLocal, CacheRecord, QueryLog
@@ -65,15 +70,23 @@ class CacheService:
                 await self._log_query(query, "llm", "miss", processing_time, None)
                 return response
             
-            # Stage 4: Hybrid search with BM25 + Dense embeddings
-            logger.info("Performing hybrid search (BM25 + Dense embeddings)...")
-            similar_results = await self._hybrid_semantic_search(
-                query=query,
-                query_embedding=query_embedding,
-                cached_queries=cached_queries
-            )
-            
-            logger.info(f"Hybrid search found {len(similar_results)} candidate results")
+            # Stage 4: Hybrid search with BM25 + Dense embeddings or regular dense search
+            if settings.HYBRID_SEARCH_ENABLED:
+                logger.info("Performing hybrid search (BM25 + Dense embeddings)...")
+                similar_results = await self._hybrid_semantic_search(
+                    query=query,
+                    query_embedding=query_embedding,
+                    cached_queries=cached_queries
+                )
+                logger.info(f"Hybrid search found {len(similar_results)} candidate results")
+            else:
+                logger.info("Hybrid search disabled, using dense-only search...")
+                similar_results = self.qdrant_service.search_similar_queries(
+                    query_embedding=query_embedding,
+                    limit=settings.TOP_K_CANDIDATES,
+                    similarity_threshold=settings.CACHE_SIMILARITY_THRESHOLD
+                )
+                logger.info(f"Dense search found {len(similar_results)} candidate results")
             
             if not similar_results:
                 logger.info("No similar queries found in hybrid search - proceeding with LLM")
@@ -83,7 +96,7 @@ class CacheService:
                 return response
             
             # Log similar results for debugging
-            for i, result in enumerate(similar_results[:5]):  # Log top 5
+            for i, result in enumerate(similar_results[:settings.FINAL_TOP_K]):  # Log top settings.FINAL_TOP_K
                 logger.info(f"Hybrid result {i+1}: '{result.cache_entry.query[:50]}...' (score: {result.similarity_score:.3f})")
             
             # Stage 5: Cross-encoder re-ranking for precision
@@ -446,8 +459,6 @@ class CacheService:
                         
                         if cache_record:
                             # Create a perfect match result
-                            from app.models.schemas import CacheEntry, CacheMetadata, CacheSource, QueryType
-                            
                             metadata = CacheMetadata(
                                 source=CacheSource(cache_record.metadata_json.get("source", "cache")),
                                 timestamp=cache_record.created_at,
@@ -481,8 +492,8 @@ class CacheService:
             # Step 1: Get dense embedding scores from Qdrant
             dense_results = self.qdrant_service.search_similar_queries(
                 query_embedding=query_embedding,
-                limit=settings.TOP_K_CANDIDATES * 2,  # Get more candidates for hybrid ranking
-                similarity_threshold=0.3  # Lower threshold for initial retrieval
+                limit=settings.TOP_K_CANDIDATES * settings.HYBRID_RETRIEVAL_MULTIPLIER,  # Get more candidates for hybrid ranking
+                similarity_threshold=settings.CACHE_SIMILARITY_THRESHOLD * 0.5  # Lower threshold for initial retrieval
             )
             
             if not dense_results:
@@ -501,7 +512,7 @@ class CacheService:
                 query=query,
                 cached_queries=dense_queries,
                 dense_scores=dense_scores,
-                alpha=0.7  # 70% weight for dense, 30% for BM25
+                alpha=settings.DENSE_WEIGHT  # Use settings.DENSE_WEIGHT instead of 0.7
             )
             
             # Step 4: Smart threshold filtering based on score distribution
@@ -546,8 +557,8 @@ class CacheService:
             logger.info(f"Hybrid search filtered to {len(filtered_results)} results above threshold {final_threshold:.3f}")
             
             # Log the top results for debugging
-            for i, result in enumerate(filtered_results[:3]):
-                logger.info(f"Final result {i+1}: '{result.cache_entry.query[:50]}...' (score: {result.similarity_score:.3f})")
+            for i, result in enumerate(filtered_results[:settings.FINAL_TOP_K]):  # Log top settings.FINAL_TOP_K
+                logger.info(f"Hybrid result {i+1}: '{result.cache_entry.query[:50]}...' (score: {result.similarity_score:.3f})")
             
             return filtered_results
             

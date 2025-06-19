@@ -16,9 +16,9 @@ class BM25:
     """
     Optimized BM25 implementation for semantic cache retrieval
     """
-    def __init__(self, k1: float = 1.5, b: float = 0.75):
-        self.k1 = k1  # Term frequency saturation parameter
-        self.b = b    # Length normalization parameter
+    def __init__(self, k1: float = None, b: float = None):
+        self.k1 = k1 if k1 is not None else settings.BM25_K1  # Term frequency saturation parameter
+        self.b = b if b is not None else settings.BM25_B    # Length normalization parameter
         self.corpus = []
         self.doc_freqs = []
         self.idf = {}
@@ -188,7 +188,7 @@ class EmbeddingService:
             self.embedding_cache[query_hash] = embedding_list
             
             # Limit cache size
-            if len(self.embedding_cache) > 1000:
+            if len(self.embedding_cache) > settings.MAX_EMBEDDING_CACHE_SIZE:
                 # Remove oldest entries
                 oldest_keys = list(self.embedding_cache.keys())[:100]
                 for key in oldest_keys:
@@ -225,7 +225,7 @@ class EmbeddingService:
         query: str, 
         cached_queries: List[str],
         dense_scores: List[float],
-        alpha: float = 0.7
+        alpha: float = None
     ) -> List[Tuple[int, float]]:
         """
         Combine BM25 and dense embedding scores for hybrid search
@@ -240,6 +240,10 @@ class EmbeddingService:
             List of (index, combined_score) tuples sorted by score
         """
         try:
+            # Use configuration if alpha not provided
+            if alpha is None:
+                alpha = settings.DENSE_WEIGHT
+            
             # Update BM25 corpus if needed
             self.update_bm25_corpus(cached_queries)
             
@@ -264,7 +268,7 @@ class EmbeddingService:
                 for i, (dense_score, bm25_score) in enumerate(zip(dense_scores, bm25_scores)):
                     if dense_score >= exact_match_threshold:
                         # For exact matches, keep the dense score high
-                        combined_score = dense_score * 0.95 + bm25_score * 0.05  # 95% dense, 5% BM25
+                        combined_score = dense_score * settings.DENSE_WEIGHT + bm25_score * settings.BM25_WEIGHT  # Use configured weights
                     else:
                         # Standard hybrid scoring for non-exact matches
                         combined_score = alpha * dense_score + (1 - alpha) * self._normalize_single_bm25_score(bm25_score, bm25_scores)
@@ -341,7 +345,7 @@ class EmbeddingService:
         
         return min(score / max_score, 1.0)
 
-    def encode_batch(self, queries: List[str], batch_size: int = 32) -> List[List[float]]:
+    def encode_batch(self, queries: List[str], batch_size: int = None) -> List[List[float]]:
         """
         Encode multiple queries in optimized batches
         
@@ -355,6 +359,10 @@ class EmbeddingService:
         try:
             if self.bi_encoder is None:
                 raise ValueError("Bi-encoder model not initialized")
+            
+            # Use configuration if batch_size not provided
+            if batch_size is None:
+                batch_size = settings.BATCH_SIZE
             
             all_embeddings = []
             
@@ -412,7 +420,7 @@ class EmbeddingService:
             pairs = [[processed_query, candidate] for candidate in processed_candidates]
             
             # Compute scores in batches for efficiency
-            batch_size = 32
+            batch_size = settings.BATCH_SIZE
             all_scores = []
             
             for i in range(0, len(pairs), batch_size):
