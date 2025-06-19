@@ -4,7 +4,7 @@ An AI-powered semantic caching system that optimizes LLM query performance throu
 
 ## 🚀 Features
 
-- **Hybrid Semantic Search**: BM25 lexical + dense vector embeddings (BGE-large-en-v1.5) with MS-MARCO cross-encoder reranking
+- **Hybrid Semantic Search**: BM25 lexical + dense vector embeddings (BGE-large) with MS-MARCO cross-encoder reranking
 - **TTL Management**: LLM-powered query classification (Evergreen/Semi-dynamic/Time-sensitive) for optimal cache expiration
 - **Multi-Tier Storage**: Qdrant vector database (1024D) + SQLite metadata with automated Celery-based cleanup
 - **Load Management**: 4-tier adaptive degradation (LOW/MEDIUM/HIGH/CRITICAL) with CPU/memory monitoring and rate limiting
@@ -37,6 +37,7 @@ docker-compose build
 
 # 4. Start all services
 docker-compose up
+docker-compose up -d (detached)
 
 # 5. View logs (separate terminal)
 docker-compose logs -f
