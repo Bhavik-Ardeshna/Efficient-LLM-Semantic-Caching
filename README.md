@@ -335,15 +335,6 @@ Based on actual load test results (June 2025):
 | **Throughput (RPS)**  | 0.88                | 2.47                 | 0.11\*             |
 | **Primary Failures**  | Timeouts (Status 0) | Connection drops     | Limited requests\* |
 
-\*Note: Stress test showed connection issues with only 2 successful requests completed
-
-#### Key Findings
-
-- **Optimal Load**: System performs best at moderate concurrency (10-50 users)
-- **Response Times**: Cache operations take 7-16 seconds under load (higher than expected)
-- **Failure Pattern**: Timeouts and connection drops are primary failure modes
-- **Throughput**: Peak sustainable throughput ~2.5 RPS under high load
-
 ## 🚨 Monitoring
 
 ### Health Endpoints
