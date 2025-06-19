@@ -1,0 +1,6 @@
+Method,Name,Error,Occurrences
+GET,GET /api/cache/entries,CatchResponseError('Status code: 0'),5
+GET,GET /health,CatchResponseError('Status code: 0'),1
+POST,POST /api/query,CatchResponseError('Status code: 0'),5
+GET,GET /api/cache/search,CatchResponseError('Status code: 0'),4
+GET,GET /api/cache/stats,CatchResponseError('Status code: 0'),1

@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.models.schemas import CacheEntry, SimilaritySearchResult
 
 
+
 class QdrantService:
     def __init__(self):
         self.client = None
@@ -235,6 +236,120 @@ class QdrantService:
                 "points_count": 0
             }
     
+    def delete_collection(self) -> bool:
+        """
+        Delete the entire collection
+        
+        Returns:
+            True if successfully deleted, False otherwise
+        """
+        try:
+            logger.warning(f"Deleting collection: {self.collection_name}")
+            
+            # Check if collection exists first
+            collections = self.client.get_collections()
+            collection_exists = any(
+                col.name == self.collection_name 
+                for col in collections.collections
+            )
+            
+            if collection_exists:
+                self.client.delete_collection(self.collection_name)
+                logger.info(f"Collection {self.collection_name} deleted successfully")
+                return True
+            else:
+                logger.info(f"Collection {self.collection_name} does not exist")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to delete collection: {e}")
+            return False
+    
+    def recreate_collection(self) -> bool:
+        """
+        Delete and recreate the collection with updated schema
+        
+        Returns:
+            True if successfully recreated, False otherwise
+        """
+        try:
+            logger.info(f"Recreating collection: {self.collection_name}")
+            
+            # Delete existing collection
+            if not self.delete_collection():
+                logger.error("Failed to delete existing collection")
+                return False
+            
+            # Wait a moment for deletion to complete
+            import time
+            time.sleep(1)
+            
+            # Create new collection
+            logger.info(f"Creating new collection with updated schema: {self.collection_name}")
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(
+                    size=settings.EMBEDDING_DIMENSION,
+                    distance=Distance.COSINE
+                )
+            )
+            
+            logger.info(f"Collection {self.collection_name} recreated successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to recreate collection: {e}")
+            return False
+    
+    def clear_all_data(self) -> bool:
+        """
+        Clear all data from the collection without deleting the collection
+        
+        Returns:
+            True if successfully cleared, False otherwise
+        """
+        try:
+            logger.warning(f"Clearing all data from collection: {self.collection_name}")
+            
+            # Get all points in batches and delete them
+            scroll_result = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=1000,
+                with_payload=False,
+                with_vectors=False
+            )
+            
+            total_deleted = 0
+            while scroll_result[0]:  # While there are points
+                point_ids = [point.id for point in scroll_result[0]]
+                
+                if point_ids:
+                    self.client.delete(
+                        collection_name=self.collection_name,
+                        points_selector=point_ids
+                    )
+                    total_deleted += len(point_ids)
+                    logger.info(f"Deleted batch of {len(point_ids)} points (total: {total_deleted})")
+                
+                # Get next batch
+                if scroll_result[1]:  # If there's a next page offset
+                    scroll_result = self.client.scroll(
+                        collection_name=self.collection_name,
+                        limit=1000,
+                        offset=scroll_result[1],
+                        with_payload=False,
+                        with_vectors=False
+                    )
+                else:
+                    break
+            
+            logger.info(f"Cleared all data from collection. Total points deleted: {total_deleted}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to clear collection data: {e}")
+            return False
+    
     def _convert_point_to_cache_entry(self, point: ScoredPoint) -> CacheEntry:
         """Convert Qdrant point to CacheEntry"""
         from app.models.schemas import CacheMetadata, CacheSource, QueryType
@@ -256,4 +371,168 @@ class QdrantService:
             query_embedding=point.vector or [],
             response=point.payload["response"],
             metadata=metadata
-        ) 
+        )
+    
+    def get_all_points(self, limit: int = 100, offset: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get all points from the collection with pagination
+        
+        Args:
+            limit: Maximum number of points to return (default: 100, max: 1000)
+            offset: Pagination offset from previous request
+            
+        Returns:
+            Dictionary containing points and pagination info
+        """
+        try:
+            # Limit the maximum number of points per request
+            limit = min(limit, 1000)
+            
+            logger.info(f"Retrieving points from collection: limit={limit}, offset={offset}")
+            
+            # Use scroll to get points with pagination
+            scroll_result = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=limit,
+                offset=offset,
+                with_payload=True,
+                with_vectors=True
+            )
+            
+            points, next_offset = scroll_result
+            
+            # Convert points to cache entries
+            cache_entries = []
+            for point in points:
+                try:
+                    cache_entry = self._convert_point_to_cache_entry(point)
+                    cache_entries.append({
+                        "id": cache_entry.id,
+                        "query": cache_entry.query,
+                        "response": cache_entry.response,
+                        "embedding_dimension": len(cache_entry.query_embedding),
+                        "metadata": {
+                            "source": cache_entry.metadata.source.value,
+                            "timestamp": cache_entry.metadata.timestamp.isoformat(),
+                            "ttl": cache_entry.metadata.ttl,
+                            "query_type": cache_entry.metadata.query_type.value,
+                            "access_count": cache_entry.metadata.access_count,
+                            "last_accessed": cache_entry.metadata.last_accessed.isoformat(),
+                            "confidence_score": cache_entry.metadata.confidence_score,
+                            "similarity_score": cache_entry.metadata.similarity_score
+                        }
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to convert point {point.id}: {e}")
+                    # Include raw point data for debugging
+                    cache_entries.append({
+                        "id": str(point.id),
+                        "error": f"Conversion failed: {str(e)}",
+                        "raw_payload": point.payload
+                    })
+            
+            result = {
+                "points": cache_entries,
+                "count": len(cache_entries),
+                "has_more": bool(next_offset),
+                "next_offset": next_offset,
+                "collection_info": self.get_collection_info()
+            }
+            
+            logger.info(f"Retrieved {len(cache_entries)} points, has_more: {bool(next_offset)}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to get all points: {e}")
+            return {
+                "error": str(e),
+                "points": [],
+                "count": 0,
+                "has_more": False,
+                "next_offset": None
+            }
+    
+    def get_point_by_id(self, point_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific point by ID
+        
+        Args:
+            point_id: ID of the point to retrieve
+            
+        Returns:
+            Point data or None if not found
+        """
+        try:
+            logger.debug(f"Retrieving point by ID: {point_id}")
+            
+            points = self.client.retrieve(
+                collection_name=self.collection_name,
+                ids=[point_id],
+                with_payload=True,
+                with_vectors=True
+            )
+            
+            if not points:
+                return None
+            
+            point = points[0]
+            cache_entry = self._convert_point_to_cache_entry(point)
+            
+            return {
+                "id": cache_entry.id,
+                "query": cache_entry.query,
+                "response": cache_entry.response,
+                "query_embedding": cache_entry.query_embedding,
+                "embedding_dimension": len(cache_entry.query_embedding),
+                "metadata": {
+                    "source": cache_entry.metadata.source.value,
+                    "timestamp": cache_entry.metadata.timestamp.isoformat(),
+                    "ttl": cache_entry.metadata.ttl,
+                    "query_type": cache_entry.metadata.query_type.value,
+                    "access_count": cache_entry.metadata.access_count,
+                    "last_accessed": cache_entry.metadata.last_accessed.isoformat(),
+                    "confidence_score": cache_entry.metadata.confidence_score,
+                    "similarity_score": cache_entry.metadata.similarity_score
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get point by ID {point_id}: {e}")
+            return None
+    
+    def search_points_by_query_text(self, search_text: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Search points by query text (substring match)
+        
+        Args:
+            search_text: Text to search for in queries
+            limit: Maximum number of results
+            
+        Returns:
+            List of matching points
+        """
+        try:
+            logger.debug(f"Searching points by query text: '{search_text}'")
+            
+            # Get all points and filter by query text
+            all_points_result = self.get_all_points(limit=1000)
+            all_points = all_points_result.get("points", [])
+            
+            # Filter by search text
+            search_text_lower = search_text.lower()
+            matching_points = []
+            
+            for point in all_points:
+                query = point.get("query", "").lower()
+                if search_text_lower in query:
+                    matching_points.append(point)
+                    
+                if len(matching_points) >= limit:
+                    break
+            
+            logger.info(f"Found {len(matching_points)} points matching '{search_text}'")
+            return matching_points
+            
+        except Exception as e:
+            logger.error(f"Failed to search points by query text: {e}")
+            return [] 

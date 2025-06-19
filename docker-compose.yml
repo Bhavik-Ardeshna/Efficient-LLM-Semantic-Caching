@@ -1,30 +1,88 @@
 version: "3.8"
 
 services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///data/semantic_cache.db
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - qdrant
+      - redis
+    command: uvicorn app.main:app --host 0.0.0.0 --port 3000
+
   qdrant:
     image: qdrant/qdrant:latest
     ports:
       - "6333:6333"
       - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
     environment:
       - QDRANT__SERVICE__HTTP_PORT=6333
       - QDRANT__SERVICE__GRPC_PORT=6334
-    volumes:
-      - qdrant_storage:/qdrant/storage
 
-  semantic-cache-api:
-    build: .
+  redis:
+    image: redis:7-alpine
     ports:
-      - "8000:8000"
-    environment:
-      - QDRANT_URL=http://qdrant:6333
-      - DATABASE_URL=sqlite:///data/semantic_cache.db
-    depends_on:
-      - qdrant
+      - "6380:6379" # Use port 6380 externally, 6379 internally
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  celery_worker:
+    build: .
     volumes:
       - ./data:/app/data
-    env_file:
-      - .env
+    environment:
+      - DATABASE_URL=sqlite:///data/semantic_cache.db
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - C_FORCE_ROOT=1
+    depends_on:
+      - redis
+      - qdrant
+    command: python worker.py
+
+  celery_beat:
+    build: .
+    volumes:
+      - ./data:/app/data
+      - beat_schedule:/tmp
+    environment:
+      - DATABASE_URL=sqlite:///data/semantic_cache.db
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - C_FORCE_ROOT=1
+    depends_on:
+      - redis
+      - qdrant
+    command: python celery_beat.py
+
+  # celery_flower:
+  #   build: .
+  #   ports:
+  #     - "5555:5555"
+  #   environment:
+  #     - CELERY_BROKER_URL=redis://redis:6379/0
+  #     - CELERY_RESULT_BACKEND=redis://redis:6379/0
+  #     - C_FORCE_ROOT=1
+  #   depends_on:
+  #     - redis
+  #   command: flower --broker=redis://redis:6379/0 --port=5555
 
 volumes:
   qdrant_storage:
+  redis_data:
+  beat_schedule:

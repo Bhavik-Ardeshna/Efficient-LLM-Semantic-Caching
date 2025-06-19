@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Text, DateTime, Integer, Float, JSON
+from sqlalchemy import create_engine, Column, String, Text, DateTime, Integer, Float, JSON, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.sql import func
@@ -54,6 +54,22 @@ class QueryLog(Base):
     timestamp = Column(DateTime, default=func.now(), nullable=False)
     similarity_score = Column(Float, nullable=True)
     metadata_json = Column(JSON, nullable=True)
+
+
+class CleanupTask(Base):
+    __tablename__ = "cleanup_tasks"
+    
+    id = Column(String, primary_key=True, index=True)
+    cache_entry_id = Column(String, nullable=False, index=True)
+    scheduled_at = Column(DateTime, nullable=False, index=True)
+    executed_at = Column(DateTime, nullable=True)
+    is_completed = Column(Boolean, default=False, index=True)
+    is_cancelled = Column(Boolean, default=False, index=True)
+    task_id = Column(String, nullable=True, index=True)  # Celery task ID
+    retry_count = Column(Integer, default=0)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now(), nullable=False)
 
 
 async def init_db():

@@ -35,12 +35,21 @@ async def lifespan(app: FastAPI):
     # Initialize Qdrant collections
     await qdrant_service.init_collections()
     
-    logger.info("Service initialized successfully")
+    # Initialize resilience services
+    from app.services.load_manager import load_manager
+    
+    # Start load monitoring
+    await load_manager.start_monitoring()
+    
+    logger.info("Service initialized successfully with resilience features")
     
     yield
     
     # Shutdown
     logger.info("Shutting down semantic cache service...")
+    
+    # Stop load monitoring
+    await load_manager.stop_monitoring()
 
 
 app = FastAPI(

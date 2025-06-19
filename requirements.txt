@@ -21,4 +21,19 @@ python-dotenv
 loguru
 prometheus-client
 pytest
-aiosqlite 
+aiosqlite
+celery[redis]
+redis
+kombu
+flower
+# Circuit breaker and resilience
+
+tenacity
+async-timeout
+# Load testing
+locust
+aiohttp
+asyncio-throttle
+# Monitoring and metrics
+psutil
+memory-profiler 

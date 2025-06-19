@@ -4,6 +4,7 @@ from loguru import logger
 from app.core.config import settings
 
 
+
 class LLMService:
     def __init__(self):
         self.client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
