@@ -1,4 +1,4 @@
-# Boardy - Semantic Cache Service
+# Semantic Cache Service
 
 An AI-powered semantic caching system that optimizes LLM query performance through intelligent caching, retrieval, and reranking strategies.
 
